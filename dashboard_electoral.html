@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simulador electoral</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{--bg:#f4f6f9;--card:#fff;--tx:#1f2937;--mu:#6b7280;--bd:#e5e7eb;--hd:#1e3a5f;--ok:#16a34a;--ko:#dc2626}
+@media(prefers-color-scheme:dark){:root{--bg:#111827;--card:#1f2937;--tx:#e5e7eb;--mu:#9ca3af;--bd:#374151;--hd:#0b1b2e}}
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--tx)}
+header{background:var(--hd);color:#fff;padding:14px 22px;font-size:20px;font-weight:600}
+main{max-width:1200px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px 16px;margin-bottom:16px}
+.card h2{margin:0 0 10px;font-size:15px}
+.ctl{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end}
+.ctl label{display:flex;flex-direction:column;font-size:12px;color:var(--mu);gap:4px}
+.ctl input,.ctl button{font:inherit;font-size:14px;padding:7px 9px;border:1px solid var(--bd);border-radius:6px;background:var(--bg);color:var(--tx)}
+.ctl button{cursor:pointer;background:#2563eb;color:#fff;border:0}
+.ctl button.sec{background:var(--bg);color:var(--tx);border:1px solid var(--bd)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px}
+.kpi{background:var(--card);border:1px solid var(--bd);border-left:4px solid #2563eb;border-radius:10px;padding:12px 14px}
+.kpi b{display:block;font-size:24px}.kpi span{font-size:12px;color:var(--mu)}
+.scroll{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{padding:7px 10px;border-bottom:1px solid var(--bd);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+th{font-size:12px;color:var(--mu)}
+tr.tot td{font-weight:700;background:var(--bg)}
+tr.out td{color:var(--mu)}
+.s{font-weight:700;text-align:center}
+.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:12px;margin-bottom:8px}
+.legend i{display:inline-block;width:11px;height:11px;border-radius:2px;margin-right:5px;vertical-align:-1px}
+.grid2{display:grid;grid-template-columns:2fr 1fr;gap:16px}
+@media(max-width:850px){.grid2{grid-template-columns:1fr}}
+.gal{display:flex;align-items:center;gap:8px;margin:7px 0;font-size:13px}
+.gal span:first-child{width:110px}.gal div{height:14px;border-radius:3px}
+#msg{color:var(--ko);font-size:13px;margin-top:8px}
+ul{margin:0;padding-left:18px;font-size:13px;line-height:1.6}
+.hint{font-size:12px;color:var(--mu);margin-top:8px}
+</style>
+</head>
+<body>
+<header>Simulador electoral · comparación de sistemas de reparto de escaños</header>
+<main>
+<div class="card">
+  <div class="ctl">
+    <label>1. Archivo Excel (votos absolutos)<input type="file" id="file" accept=".xlsx,.xls,.csv"></label>
+    <label>2. Número de escaños<input type="number" id="N" value="10" min="1" step="1" style="width:110px"></label>
+    <label>3. Barrera electoral (% del total)<input type="number" id="bar" value="3" min="0" max="100" step="0.1" style="width:130px"></label>
+    <label>Primer divisor Danés corregido<input type="number" id="fd" value="1.4" min="0.1" step="0.1" style="width:130px"></label>
+    <button class="sec" id="demo">Datos de ejemplo</button>
+    <button id="dl">Descargar CSV</button>
+  </div>
+  <div class="hint">Formato: una columna con el nombre del partido y otra con los votos. Se lee la primera hoja. Leer .xlsx requiere conexión a internet (librería SheetJS); los .csv funcionan sin conexión.</div>
+  <div id="msg"></div>
+</div>
+
+<div id="app" hidden>
+  <div class="kpis" id="kpis"></div>
+  <div class="card"><h2>Escaños por partido y método</h2><div class="scroll" id="tab"></div></div>
+  <div class="grid2">
+    <div class="card"><h2>Comparación gráfica de escaños</h2><div class="legend" id="leg"></div><div class="scroll" id="chart"></div></div>
+    <div class="card"><h2>Desproporcionalidad (Gallagher)</h2><div id="gal"></div><div class="hint">Menor valor = reparto más proporcional a los votos.</div></div>
+  </div>
+  <div class="card"><h2>Notas metodológicas</h2><ul>
+    <li><b>Hare:</b> cuota V/N y resto mayor.</li>
+    <li><b>Saint Laguë:</b> divisores 1, 3, 5, 7…</li>
+    <li><b>d'Hondt:</b> divisores 1, 2, 3, 4…</li>
+    <li><b>Imperiali:</b> cuota V/(N+2) y resto mayor; si se exceden los escaños, el divisor baja a N+1 y luego a N.</li>
+    <li><b>Danés:</b> divisores 1, 4, 7, 10…</li>
+    <li><b>Danés corregido:</b> divisores f, 4, 7, 10…, con f editable (por defecto 1,4).</li>
+    <li>La barrera se aplica sobre el total de votos del archivo; V se calcula solo con los partidos que la superan. Los empates se resuelven a favor del partido con más votos.</li>
+  </ul></div>
+</div>
+</main>
+
+<script>
+const M=["Hare","Saint Laguë","d'Hondt","Imperiali","Danés","Danés corregido"];
+const COL=["#2563eb","#16a34a","#f59e0b","#dc2626","#7c3aed","#0891b2"];
+let DATA=[],LAST=null;
+const $=id=>document.getElementById(id);
+const fmt=(x,d=0)=>x.toLocaleString("es-ES",{minimumFractionDigits:d,maximumFractionDigits:d});
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const sum=a=>a.reduce((x,y)=>x+y,0);
+
+/* ---------- Métodos de reparto ---------- */
+function divisores(v,N,f){
+  const n=v.length,a=[];
+  for(let p=0;p<n;p++)for(let k=1;k<=N;k++)a.push([v[p]/f(k),v[p],p]);
+  a.sort((x,y)=>y[0]-x[0]||y[1]-x[1]||x[2]-y[2]);
+  const s=Array(n).fill(0);
+  for(let i=0;i<N&&i<a.length;i++)s[a[i][2]]++;
+  return s;
+}
+function resto(v,N,ex){
+  const n=v.length,V=sum(v);
+  if(!n||!V)return Array(n).fill(0);
+  let d=N+ex,q,e;
+  for(;;){
+    q=V/d;e=v.map(x=>Math.floor(x/q+1e-9));
+    if(sum(e)<=N||d<=N)break;
+    d--;
+  }
+  const r=v.map((x,i)=>[x/q-e[i],x,i]).sort((a,b)=>b[0]-a[0]||b[1]-a[1]||a[2]-b[2]);
+  const f=N-sum(e);
+  for(let i=0;i<f;i++)e[r[i][2]]++;
+  return e;
+}
+function calcular(v,N,fd){
+  return [
+    resto(v,N,0),
+    divisores(v,N,k=>2*k-1),
+    divisores(v,N,k=>k),
+    resto(v,N,2),
+    divisores(v,N,k=>3*k-2),
+    divisores(v,N,k=>k===1?fd:3*k-2)
+  ];
+}
+const gallagher=(pv,ps)=>Math.sqrt(0.5*sum(pv.map((x,i)=>(x-ps[i])**2)));
+
+/* ---------- Lectura de datos ---------- */
+function parseRows(rows){
+  rows=rows.filter(r=>r&&r.length);
+  const num=x=>typeof x==="number"?x:parseFloat(String(x).replace(/\./g,"").replace(",","."));
+  let best=-1,bestCnt=0,w=Math.max(...rows.map(r=>r.length));
+  for(let c=0;c<w;c++){
+    const cnt=rows.filter(r=>r[c]!==undefined&&r[c]!==""&&isFinite(num(r[c]))).length;
+    if(cnt>bestCnt){bestCnt=cnt;best=c}
+  }
+  if(best<0)throw new Error("No se encontró una columna numérica de votos.");
+  let nc=0;
+  for(let c=0;c<w;c++){if(c!==best&&rows.some(r=>typeof r[c]==="string"&&isNaN(num(r[c])))){nc=c;break}}
+  const out=[];
+  rows.forEach((r,i)=>{
+    const v=num(r[best]);
+    if(isFinite(v)&&v>=0)out.push({name:String(r[nc]!==undefined&&nc!==best?r[nc]:"Partido "+(out.length+1)),votes:v});
+  });
+  if(!out.length||!sum(out.map(o=>o.votes)))throw new Error("No hay votos válidos en el archivo.");
+  return out;
+}
+function csvRows(t){
+  const sep=t.indexOf(";")>=0?";":",";
+  return t.split(/\r?\n/).filter(l=>l.trim()).map(l=>l.split(sep).map(x=>x.trim().replace(/^"|"$/g,"")));
+}
+$("file").addEventListener("change",async e=>{
+  const f=e.target.files[0];if(!f)return;
+  try{
+    let rows;
+    if(/\.csv$/i.test(f.name))rows=csvRows(await f.text());
+    else{
+      if(typeof XLSX==="undefined")throw new Error("No se pudo cargar la librería de Excel (¿sin conexión?). Guarda el archivo como .csv.");
+      const wb=XLSX.read(await f.arrayBuffer(),{type:"array"});
+      rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:""});
+    }
+    DATA=parseRows(rows);$("msg").textContent="";render();
+  }catch(err){$("msg").textContent=err.message;}
+});
+$("demo").onclick=()=>{
+  DATA=[["Partido A",412300],["Partido B",368900],["Partido C",201500],["Partido D",98700],["Partido E",61200],["Partido F",28400],["Partido G",9800]].map(x=>({name:x[0],votes:x[1]}));
+  $("msg").textContent="";render();
+};
+["N","bar","fd"].forEach(id=>$(id).addEventListener("input",()=>DATA.length&&render()));
+
+/* ---------- Render ---------- */
+function render(){
+  const N=parseInt($("N").value),bar=parseFloat($("bar").value),fd=parseFloat($("fd").value);
+  if(!(N>=1)){$("msg").textContent="Indique un número de escaños válido.";return}
+  if(!(bar>=0&&bar<=100)){$("msg").textContent="La barrera debe estar entre 0 y 100.";return}
+  if(!(fd>0)){$("msg").textContent="El primer divisor debe ser positivo.";return}
+  $("msg").textContent="";
+  const tot=sum(DATA.map(d=>d.votes));
+  const rows=DATA.map(d=>({...d,pct:d.votes/tot*100,pasa:d.votes/tot*100>=bar,s:Array(6).fill(0)}));
+  const el=rows.filter(r=>r.pasa);
+  if(el.length){
+    const res=calcular(el.map(r=>r.votes),N,fd);
+    el.forEach((r,i)=>{r.s=res.map(m=>m[i])});
+  }
+  const vEl=sum(el.map(r=>r.votes));
+  LAST={rows,N,tot};
+  $("app").hidden=false;
+
+  $("kpis").innerHTML=[
+    [fmt(tot),"Votos totales","#2563eb"],
+    [el.length+" de "+rows.length,"Partidos que superan la barrera","#16a34a"],
+    [fmt(vEl/tot*100,1)+"%","Votos que entran en el reparto","#f59e0b"],
+    [N,"Escaños a repartir","#7c3aed"]
+  ].map(k=>`<div class="kpi" style="border-left-color:${k[2]}"><b>${k[0]}</b><span>${k[1]}</span></div>`).join("");
+
+  let h="<table><thead><tr><th>Partido</th><th>Votos</th><th>% votos</th><th>Barrera</th>"+M.map(m=>`<th class="s">${m}</th>`).join("")+"</tr></thead><tbody>";
+  rows.forEach(r=>{
+    h+=`<tr class="${r.pasa?"":"out"}"><td>${esc(r.name)}</td><td>${fmt(r.votes)}</td><td>${fmt(r.pct,2)}</td>`+
+       `<td style="color:var(--${r.pasa?"ok":"ko"});text-align:center">${r.pasa?"Sí":"No"}</td>`+
+       r.s.map(x=>`<td class="s">${x}</td>`).join("")+"</tr>";
+  });
+  h+=`<tr class="tot"><td>TOTAL</td><td>${fmt(tot)}</td><td>100,00</td><td></td>`+
+     M.map((m,i)=>`<td class="s">${sum(rows.map(r=>r.s[i]))}</td>`).join("")+"</tr></tbody></table>";
+  $("tab").innerHTML=h;
+
+  $("leg").innerHTML=M.map((m,i)=>`<span><i style="background:${COL[i]}"></i>${m}</span>`).join("");
+  const cs=[...el].sort((a,b)=>b.votes-a.votes);
+  if(!cs.length){$("chart").innerHTML="<p class='hint'>Ningún partido supera la barrera.</p>"}
+  else{
+    const mx=Math.max(1,...cs.map(r=>Math.max(...r.s))),bw=16,gw=6*bw+22,H=280,top=20,bot=40,ph=H-top-bot;
+    const W=cs.length*gw+40;
+    let s=`<svg width="${W}" height="${H}" font-size="11" fill="currentColor">`;
+    for(let t=0;t<=mx;t+=Math.max(1,Math.ceil(mx/5))){
+      const y=top+ph-t/mx*ph;
+      s+=`<line x1="30" x2="${W}" y1="${y}" y2="${y}" stroke="#9ca3af" stroke-opacity=".3"/><text x="24" y="${y+4}" text-anchor="end">${t}</text>`;
+    }
+    cs.forEach((r,i)=>{
+      const x0=36+i*gw;
+      r.s.forEach((v,j)=>{
+        const bh=v/mx*ph,x=x0+j*bw;
+        s+=`<rect x="${x}" y="${top+ph-bh}" width="${bw-2}" height="${bh}" fill="${COL[j]}"><title>${esc(r.name)} · ${M[j]}: ${v} escaños</title></rect>`;
+        if(v>0)s+=`<text x="${x+(bw-2)/2}" y="${top+ph-bh-3}" text-anchor="middle" font-size="9">${v}</text>`;
+      });
+      s+=`<text x="${x0+3*bw}" y="${H-bot+16}" text-anchor="middle">${esc(r.name.length>12?r.name.slice(0,11)+"…":r.name)}</text>`;
+    });
+    $("chart").innerHTML=s+"</svg>";
+  }
+
+  const g=M.map((m,i)=>gallagher(rows.map(r=>r.pct),rows.map(r=>r.s[i]/N*100)));
+  const gm=Math.max(...g,0.01);
+  $("gal").innerHTML=M.map((m,i)=>`<div class="gal"><span>${m}</span><div style="width:${g[i]/gm*55}%;background:${COL[i]}"></div><b>${fmt(g[i],2)}</b></div>`).join("");
+}
+
+/* ---------- Descarga CSV ---------- */
+$("dl").onclick=()=>{
+  if(!LAST){$("msg").textContent="Cargue primero los datos.";return}
+  const q=s=>'"'+String(s).replace(/"/g,'""')+'"';
+  let c="\ufeffPartido;Votos;% votos;Supera barrera;"+M.join(";")+"\n";
+  LAST.rows.forEach(r=>{c+=[q(r.name),r.votes,r.pct.toFixed(2).replace(".",","),r.pasa?"Sí":"No",...r.s].join(";")+"\n"});
+  c+=["TOTAL",LAST.tot,"100","",...M.map((m,i)=>sum(LAST.rows.map(r=>r.s[i])))].join(";")+"\n";
+  const a=document.createElement("a");
+  a.href=URL.createObjectURL(new Blob([c],{type:"text/csv;charset=utf-8"}));
+  a.download="resultados_electorales.csv";a.click();
+};
+</script>
+</body>
+</html>
